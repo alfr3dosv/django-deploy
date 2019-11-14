@@ -25,6 +25,8 @@ def instalar():
     print( "----------------------")
     print("Instalando vim")
     subprocess.run("sudo apt install vim", shell=True)
+    print("Instalando vim")
+    subprocess.run("sudo apt install nginx", shell=True)
     print("----------------------")
     print("Clonando repositoro (acepta formatos https://github.com/usuario/repo.git)")
     repositorio = input("respositorio:")
@@ -40,26 +42,86 @@ def instalar():
     for i, ruta in enumerate(encontrados):
         print("{}) {}".format(i, ruta))
         n = i
-    n += 1
-    print("{}) {}".format(n, "omitir"))
     opcion = -1
     while (opcion < 0 or opcion > n):
         try:
             opcion = int(input("ruta: "))
         except Exception as e:
             opcion = -1
-    if opcion == n:
-        print("no usando requirements")
-    else:
-        print("creando virtualenv")
-        subprocess.run("virtualenv -p python3 venv", shell=True)
-        subprocess.run(". venv/bin/activate", shell=True)
-        subprocess.run("venv/bin/pip3 install -r {}".format(encontrados[opcion]), shell=True)
+    print("creando virtualenv")
+    subprocess.run("virtualenv -p python3 venv", shell=True)
+    subprocess.run(". venv/bin/activate", shell=True)
+    subprocess.run("venv/bin/pip3 install -r {}".format(encontrados[opcion]), shell=True)
+    print("Instalando gunicorn(si no esta instalado)")
+    subprocess.run("venv/bin/pip3 install gunicorn".format(encontrados[opcion]), shell=True)
+    print("creando servicio en systemd")
+    usuario_servicio = input('usuario para el servicio:')
+    app_wsgi = input('app con wsgi:')
+    gunicorn_socket = """
+    [Unit]
+    Description=gunicorn socket
+    
+    [Socket]
+    ListenStream={}/gunicorn.socket
+    
+    [Install]
+    WantedBy=sockets.target
+    """.format(os.getcwd())
+    gunicorn_service = """
+    [Unit]
+    Description=gunicorn daemon
+    Requires=gunicorn.socket
+    After=network.target
+    
+    [Service]
+    User={}
+    Group=www-data
+    WorkingDirectory={}
+    ExecStart={}/venv/bin/gunicorn \
+              --access-logfile - \
+              --workers 3 \
+              --bind unix:{}/gunicorn.sock \
+              {}.wsgi:application
+    
+    [Install]
+    WantedBy=multi-user.target
+    """.format(usuario_servicio, os.getcwd(), os.getcwd(), os.getcwd(), app_wsgi)
+    # print(gunicorn_socket)
+    # print(gunicorn_service)
+    with open('/etc/systemd/system/gunicorn.socket', 'w') as archivo:
+        archivo.write(gunicorn_socket)
+    with open('/etc/systemd/system/gunicorn.service', 'w') as archivo:
+        archivo.write(gunicorn_service)
 
+    dominios = input("dominios (separados por espacio):")
+    with open('/etc/nginx/sites-available/{}'.format(repositorio_nombre), 'w') as archivo:
+        nginx_site = """
+        server {{
+            listen 80;
+            server_name {};
+        
+            location = /favicon.ico {{ access_log off; log_not_found off; }}
+            location /static/ {{
+                root {};
+            }}
+        
+            location / {{
+                include proxy_params;
+                proxy_pass http://unix:/run/gunicorn.sock;
+            }}
+        }}
+        """.format(dominios, os.getcwd())
+        archivo.write(nginx_site)
+    subprocess.run("sudo ln -s /etc/nginx/sites-available/{} /etc/nginx/sites-enabled".format(repositorio_nombre), shell=True)
 
-
-
-
+def ejecutar_sevicios():
+    print('--- ejecutando servicio ---')
+    subprocess.run("sudo systemctl daemon-reload", shell=True)
+    subprocess.run("sudo systemctl start gunicorn.socket", shell=True)
+    subprocess.run("sudo systemctl enable gunicorn.socket", shell=True)
+    subprocess.run("sudo systemctl start gunicorn", shell=True)
+    subprocess.run("sudo systemctl enable gunicorn", shell=True)
+    subprocess.run("sudo service nginx restart", shell=True)
 
 print("""
 DDDDDDDDDDDDD          jjjj
@@ -91,11 +153,10 @@ DDDDDDDDDDDDD         j::::j  aaaaaaaaaa  aaaa nnnnnn    nnnnnn    gggggggg:::::
 opcion = input("""
 Opciones
 1) Instalar
-2) Actualizar paquetes
-4) Realizar migraciones
-5) Verificar instalacion
-3) Salir
+2) Ejecutar servicios
 opcion: 
 """)
 if opcion == "1":
     instalar()
+elif opcion == "2":
+    ejecutar_sevicios()
